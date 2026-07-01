@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# gx — gaspol-execute delegate. Jalan A: Claude pegang otak gaspol (plan/spec/review/
+# test/commit), script ini cuma tangan codegen via opencode executor (edit-only, no
+# bash/network — orchestrator pegang commit pen). Dipanggil dari langkah "implement"
+# di gaspol-execute / gaspol-parallel untuk fase bulk-mekanikal/workhorse.
+#
+# Usage:
+#   scripts/gx.sh <spec_file> [-m provider/model] [extra message...]
+#
+# Default = opencode-go/deepseek-v4-pro (paid Go-tier workhorse; gaspol-execute/parallel default).
+# SWITCH ALL runs (incl. hook-driven gaspol) via env:  export GX_MODEL=ollama/glm-5.2:cloud
+# Per-run override: -m <provider/model>. Routing:
+#   workhorse  → opencode-go/deepseek-v4-pro (default — real feature / non-trivial logic)
+#   mechanical → opencode-go/deepseek-v4-flash (faster ~12s for rename/type-hint/i18n/mass edit)
+#   heavy/open → ollama/glm-5.2:cloud  (beats deepseek-v4-pro on most coding benches; 1M ctx, MIT)
+#   agentic    → ollama/kimi-k2.7-code:cloud  (Moonshot; ~30% cheaper thinking tokens)
+#   agentic/mm → ollama/minimax-m3:cloud  (1M ctx, multimodal)
+#   FAILOVER (opencode token habis) → export GX_MODEL=ollama/glm-5.2:cloud   # separate token pool
+#   offline/private only → ollama/qwen3-coder:30b-a3b-q8_0 (free+local but SLOW on this Mac)
+# NOTE: ollama cloud models need `ollama signin` on the local daemon. free tiers = slow. Pay the receh.
+#
+# ponytail: thin wrapper, no arg-parsing lib. Add getopts only if flags grow.
+set -euo pipefail
+
+MODEL=""          # set only by -m flag (highest precedence)
+PRINT=0
+SPEC=""
+declare -a MSG=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -m|--model) MODEL="$2"; shift 2 ;;
+    --print-model) PRINT=1; shift ;;   # resolve model, echo, exit (no opencode call)
+    *) if [[ -z "$SPEC" && -f "$1" ]]; then SPEC="$1"; else MSG+=("$1"); fi; shift ;;
+  esac
+done
+
+# model resolution (SSOT): -m flag > $GX_MODEL > router state file > default
+STATE_FILE="${ROUTER_STATE:-$HOME/.config/model-router/state}"
+if [[ -z "$MODEL" ]]; then
+  if   [[ -n "${GX_MODEL:-}" ]]; then MODEL="$GX_MODEL"
+  elif [[ -s "$STATE_FILE"   ]]; then MODEL="$(<"$STATE_FILE")"; MODEL="${MODEL//[$'\n\r']/}"
+  else                                MODEL="opencode-go/deepseek-v4-pro"; fi
+fi
+
+if [[ "$PRINT" == 1 ]]; then echo "$MODEL"; exit 0; fi
+
+[[ -n "$SPEC" ]] || { echo "gx: butuh spec file. Usage: gx <spec_file> [-m model] [msg]" >&2; exit 2; }
+
+PROMPT="${MSG[*]:-Load CLAUDE.md (§16 routes/tables) + the attached spec. Implement it exactly. Gate: no placeholder/TODO/mock, follow §12 anti-slop + §6 conventions. Edit files only — do not commit.}"
+
+echo "gx → executor | model=$MODEL | spec=$SPEC" >&2
+# message positional FIRST; -f is greedy [array] so it must come LAST (else it eats the message)
+opencode run "$PROMPT" --agent executor -m "$MODEL" -f "$SPEC"
+
+echo "--- gx done. Review diff before commit: ---" >&2
+git --no-pager diff --stat
