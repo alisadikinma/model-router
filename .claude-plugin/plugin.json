@@ -1,0 +1,16 @@
+{
+  "name": "model-router",
+  "version": "0.1.0",
+  "description": "Executor-tier model router for Claude Code: route bulk-codegen between opencode (deepseek) and ollama (GLM-5.2) with auto-failover. Brain stays Anthropic subscription.",
+  "author": "alisadikinma",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/delegate.sh" }
+        ]
+      }
+    ]
+  }
+}
