@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# route — model-router executor profile switcher.
+# Writes the active executor model to a state file that gx reads. No daemon, no ccr.
+# ponytail: state = one line of text.
+#
+# Usage:
+#   route                 # print active executor model
+#   route <profile>       # switch executor (default|glm-heavy|mechanical|failover-opencode|offline)
+#   route panic [--run]   # emergency brain when Anthropic weekly-max hits (Phase G)
+#
+# Env overrides (used by tests): ROUTER_CONFIG, ROUTER_STATE
+set -euo pipefail
+
+# resolve real script dir (portable symlink follow — macOS BSD readlink safe)
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  d="$(cd -P "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$d/$src"
+done
+BIN_DIR="$(cd -P "$(dirname "$src")" && pwd)"
+ROOT="$(cd "$BIN_DIR/.." && pwd)"
+
+CONFIG="${ROUTER_CONFIG:-$HOME/.config/model-router/router.config.jsonc}"
+[[ -f "$CONFIG" ]] || CONFIG="$ROOT/router.config.jsonc"
+STATE="${ROUTER_STATE:-$HOME/.config/model-router/state}"
+LIB="$ROOT/lib/jsonc.py"
+
+j() { python3 "$LIB" "$CONFIG" "$1"; }
+
+cmd="${1:-}"
+
+case "$cmd" in
+  "")  # status
+    if [[ -f "$STATE" ]]; then
+      echo "active executor: $(cat "$STATE")"
+    else
+      echo "active executor: (unset → default $(j profiles.default))"
+    fi
+    exit 0 ;;
+esac
+# note: `route panic` command is added in Phase G.
+
+# treat arg as a profile name
+if ! model="$(j "profiles.$cmd" 2>/dev/null)" || [[ -z "$model" ]]; then
+  echo "route: unknown profile '$cmd'" >&2
+  echo "valid: $(j profiles | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname "$STATE")"
+printf '%s\n' "$model" > "$STATE"
+echo "route → $cmd | executor=$model"
