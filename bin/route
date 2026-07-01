@@ -37,8 +37,22 @@ case "$cmd" in
       echo "active executor: (unset → default $(j profiles.default))"
     fi
     exit 0 ;;
+  panic)
+    # emergency brain when Anthropic weekly-max hits: GLM-5.2 via ollama (separate pool → keeps
+    # the executor's opencode-go pool intact, per invariant). ponytail: print-first, --run opt-in.
+    PB="$(j panicBrain)"
+    if [[ "${2:-}" == "--run" ]]; then
+      shift 2
+      echo "route: launching emergency brain → opencode run -m $PB" >&2
+      exec opencode run -m "$PB" "$@"
+    fi
+    cat <<EOF
+# Anthropic weekly-max? GLM-5.2 becomes your orchestrator brain (separate ollama pool):
+opencode run -m $PB "<your task>"
+# executor's opencode-go pool stays intact. To launch directly: route panic --run "<your task>"
+EOF
+    exit 0 ;;
 esac
-# note: `route panic` command is added in Phase G.
 
 # treat arg as a profile name
 if ! model="$(j "profiles.$cmd" 2>/dev/null)" || [[ -z "$model" ]]; then
