@@ -49,9 +49,23 @@ if [[ "$PRINT" == 1 ]]; then echo "$MODEL"; exit 0; fi
 
 PROMPT="${MSG[*]:-Load CLAUDE.md (§16 routes/tables) + the attached spec. Implement it exactly. Gate: no placeholder/TODO/mock, follow §12 anti-slop + §6 conventions. Edit files only — do not commit.}"
 
-echo "gx → executor | model=$MODEL | spec=$SPEC" >&2
 # message positional FIRST; -f is greedy [array] so it must come LAST (else it eats the message)
-opencode run "$PROMPT" --agent executor -m "$MODEL" -f "$SPEC"
+run_opencode() { opencode run "$PROMPT" --agent executor -m "$1" -f "$SPEC"; }
+
+# executor auto-failover: opencode-go tier failure → retry ONCE on ollama/glm-5.2:cloud
+# (separate quota pool per invariant). ponytail ceiling: single retry, no backoff — add
+# retries/backoff only if opencode proves flaky. Never failover an already-ollama model (no loop).
+FAILOVER_MODEL="ollama/glm-5.2:cloud"
+echo "gx → executor | model=$MODEL | spec=$SPEC" >&2
+if ! run_opencode "$MODEL"; then
+  if [[ "$MODEL" == opencode-go/* ]]; then
+    echo "gx: opencode failed → failover $FAILOVER_MODEL (opencode pool dead, switching to ollama)" >&2
+    run_opencode "$FAILOVER_MODEL" || { echo "gx: failover also failed" >&2; exit 1; }
+  else
+    echo "gx: run failed (model=$MODEL) — no failover (not an opencode-go tier)" >&2
+    exit 1
+  fi
+fi
 
 echo "--- gx done. Review diff before commit: ---" >&2
 git --no-pager diff --stat
