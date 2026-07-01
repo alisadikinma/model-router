@@ -44,5 +44,5 @@ mark "$OLLAMA_SIGNIN" "ollama cloud signin (GLM-5.2 pool)"     "ollama signin"
 if [[ -z "$MODELS" ]]; then
   echo "  ❌ router models: none found — fix: pull cloud models / check opencode"
 else
-  echo "  models available:"; printf '    - %s\n' $MODELS
+  echo "  models available:"; while IFS= read -r m; do [[ -n "$m" ]] && echo "    - $m"; done <<< "$MODELS"
 fi

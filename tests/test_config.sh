@@ -18,4 +18,16 @@ for p in default glm-heavy mechanical failover-opencode offline; do
   j "profiles.$p" >/dev/null 2>&1 || fail "missing profile: $p"
 done
 echo "ok: all 5 profiles present"
+
+# regression: JSONC loader must preserve // inside string values (URLs/paths), not truncate
+python3 - "$DIR" <<'PY'
+import sys, tempfile, os
+sys.path.insert(0, sys.argv[1])
+import lib.jsonc as j
+p = tempfile.mktemp()
+open(p, "w").write('{ // c\n "u": "http://x//y", "m": "a//b" }')
+d = j.load(p); os.remove(p)
+assert d["u"] == "http://x//y" and d["m"] == "a//b", d
+print("ok: jsonc preserves // inside strings")
+PY
 echo "test_config: PASS"

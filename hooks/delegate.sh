@@ -14,7 +14,7 @@ try: print(json.load(sys.stdin).get('tool_input',{}).get('skill',''))
 except Exception: print('')" 2>/dev/null || true)"
 
 case "$SKILL" in
-  *gaspol-execute|*gaspol-parallel) ;;
+  gaspol-execute|gaspol-parallel|*:gaspol-execute|*:gaspol-parallel) ;;  # bare or namespaced only
   *) exit 0 ;;   # not our skill -> no-op passthrough
 esac
 
