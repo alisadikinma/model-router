@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# router-doctor — detect which model-router backends are present.
+#   router-doctor          # human checklist
+#   router-doctor --json   # machine output
+# ponytail: no arrays (bash 3.2 safe), detection commands guarded (never abort on missing tool).
+set -uo pipefail
+
+JSON=0; [[ "${1:-}" == "--json" ]] && JSON=1
+
+OC_AUTH=false
+[[ -f "$HOME/.local/share/opencode/auth.json" ]] && OC_AUTH=true
+
+# capture into vars FIRST, then filter — a bare `cmd | grep` under `pipefail` reports
+# the pipe as failed when `cmd` exits non-zero even if grep matched (ollama list does this).
+OLLAMA_SIGNIN=false
+if command -v ollama >/dev/null 2>&1; then
+  OLLAMA_LIST="$(ollama list 2>/dev/null || true)"
+  case "$OLLAMA_LIST" in *":cloud"*) OLLAMA_SIGNIN=true ;; esac
+fi
+
+MODELS=""
+if command -v opencode >/dev/null 2>&1; then
+  OC_MODELS="$(opencode models 2>/dev/null || true)"
+  MODELS="$(printf '%s\n' "$OC_MODELS" | grep -iE 'glm-5\.2|deepseek-v4|kimi-k2\.7|minimax-m3|qwen3-coder' | sort -u || true)"
+fi
+
+if [[ $JSON == 1 ]]; then
+  OC_AUTH="$OC_AUTH" OLLAMA_SIGNIN="$OLLAMA_SIGNIN" MODELS="$MODELS" python3 <<'PY'
+import json, os
+models = [m for m in os.environ.get("MODELS", "").splitlines() if m.strip()]
+print(json.dumps({
+    "opencode_auth": os.environ["OC_AUTH"] == "true",
+    "ollama_signin": os.environ["OLLAMA_SIGNIN"] == "true",
+    "models": models,
+}))
+PY
+  exit 0
+fi
+
+mark() { if [[ "$1" == true ]]; then echo "  ✅ $2"; else echo "  ❌ $2 — fix: $3"; fi; }
+echo "model-router doctor:"
+mark "$OC_AUTH"       "opencode auth (deepseek executor pool)" "opencode auth login"
+mark "$OLLAMA_SIGNIN" "ollama cloud signin (GLM-5.2 pool)"     "ollama signin"
+if [[ -z "$MODELS" ]]; then
+  echo "  ❌ router models: none found — fix: pull cloud models / check opencode"
+else
+  echo "  models available:"; printf '    - %s\n' $MODELS
+fi
