@@ -18,6 +18,14 @@ case "$SKILL" in
   *) exit 0 ;;   # not our skill -> no-op passthrough
 esac
 
+# Execution phase → GLM-5.2 is the execution LEAD (chain of command). Force the
+# route so a stale deepseek-default can never run the whole plan un-led; re-read
+# state so MODEL below names the lead. Per-run `-m opencode-go/deepseek-v4-pro`
+# still lets GLM hand explicit bulk slices to deepseek (override, not state).
+# ponytail: route writes $STATE — call it + re-read, don't duplicate its logic.
+"$HOME/.local/bin/route" glm-heavy >/dev/null 2>&1 || true
+if [[ -s "$STATE" ]]; then MODEL="$(<"$STATE")"; MODEL="${MODEL//[$'\n\r']/}"; fi
+
 MODEL="$MODEL" python3 <<'PY'
 import json, os
 m = os.environ["MODEL"]
