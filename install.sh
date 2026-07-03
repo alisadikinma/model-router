@@ -19,7 +19,8 @@ link "$SRC/router.config.jsonc" "$CFG_DIR/router.config.jsonc"
 link "$SRC/bin/route"           "$BIN_DIR/route"
 link "$SRC/bin/router-doctor"   "$BIN_DIR/router-doctor"
 link "$SRC/bin/gx"              "$BIN_DIR/gx"
-link "$SRC/hooks/delegate.sh"   "$HOOK_DIR/delegate.sh"
+link "$SRC/hooks/delegate.sh"      "$HOOK_DIR/delegate.sh"
+link "$SRC/hooks/code-delegate.sh" "$HOOK_DIR/code-delegate.sh"
 
 # if an old gaspol delegate hook is already registered (settings.json points at it), repoint
 # it to the new state-aware logic so the registration keeps working with no settings.json edit.

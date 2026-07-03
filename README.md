@@ -41,10 +41,26 @@ So the brain + gaspol subagents stay Anthropic. Only the **executor** is routed.
 ## Install
 
 ```bash
-./install.sh           # symlinks config + route/router-doctor/gx + delegate hook into $HOME
+./install.sh           # symlinks config + route/router-doctor/gx + delegate hooks into $HOME
 route default          # set the default executor
 router-doctor          # check which backends you have (bring your own accounts)
 ```
+
+### Two delegate hooks (LOCKED 2026-07-03)
+
+Delegation fires on **any substantive code change**, not just when a gaspol skill runs:
+
+- `hooks/delegate.sh` — PreToolUse on **`Skill`** (`gaspol-execute`/`gaspol-parallel`).
+- `hooks/code-delegate.sh` — PreToolUse on **`Write|Edit`**, gated to code extensions
+  (`.py/.ts/.vue/.js/.go/.rs/.sql/…`, skips docs/config/i18n/spec). Catches a plain
+  request the moment the brain reaches for an `Edit` on product source — no skill needed.
+
+Both inject the same chain-of-command directive naming the active executor. A hook is a
+**nudge** (injects text / can block) — it CANNOT run opencode or swap the brain's `Edit`
+for `gx`; the actual `opencode run` is a Bash call the brain issues. Nudge, not block, so
+failover / tiny-reviewed-fix / docs edits still pass. Register `Write|Edit` in
+`~/.claude/settings.json` PreToolUse (install.sh symlinks the hook; the settings entry is
+one-time). Hooks load at SESSION START.
 
 Requires: `opencode` (with auth) for DeepSeek, `ollama` (signed in) for GLM-5.2 cloud, python3.
 
