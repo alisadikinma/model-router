@@ -1,70 +1,135 @@
 #!/usr/bin/env bash
 # gx — gaspol-execute delegate. Jalan A: Claude pegang otak gaspol (plan/spec/review/
-# test/commit), script ini cuma tangan codegen via opencode executor (edit-only, no
-# bash/network — orchestrator pegang commit pen). Dipanggil dari langkah "implement"
-# di gaspol-execute / gaspol-parallel untuk fase bulk-mekanikal/workhorse.
+# test/commit), script ini cuma tangan codegen via opencode executor. Session-aware:
+# handover = arahin ke plan file YANG SUDAH ADA (atau brief inline), lalu delta-continue
+# untuk iterative fix — TIDAK bikin file handover .md terpisah tiap kali.
 #
 # Usage:
-#   scripts/gx.sh <spec_file> [-m provider/model] [extra message...]
+#   gx docs/plans/<plan>.md ["gate msg"]   # START dari plan file (legacy positional-file form)
+#   gx --new <plan.md> ["gate msg"]         # START eksplisit dari plan file (reset walau ada sesi aktif)
+#   gx --new "<brief inline + gate>"        # START planless dari brief inline (no file)
+#   gx --new -  <<'EOF' … EOF               # START planless dari brief stdin multiline (no file)
+#   gx "delta msg"                          # CONTINUE sesi aktif dengan delta (no file). Error kalau tak ada sesi.
+#   gx --end                                # tutup pointer sesi aktif (task selesai)
+#   gx --print-session                      # echo ses_id aktif (debug)
+#   gx --print-model                        # resolve model, echo, exit
+#   gx -m <provider/model> …                # override model (di START, di-pin ke sesi)
 #
-# Default = opencode-go/deepseek-v4-pro (paid Go-tier workhorse; gaspol-execute/parallel default).
-# SWITCH ALL runs (incl. hook-driven gaspol) via env:  export GX_MODEL=ollama/glm-5.2:cloud
-# Per-run override: -m <provider/model>. Routing:
-#   workhorse  → opencode-go/deepseek-v4-pro (default — real feature / non-trivial logic)
-#   mechanical → opencode-go/deepseek-v4-flash (faster ~12s for rename/type-hint/i18n/mass edit)
-#   heavy/open → ollama/glm-5.2:cloud  (beats deepseek-v4-pro on most coding benches; 1M ctx, MIT)
-#   agentic    → ollama/kimi-k2.7-code:cloud  (Moonshot; ~30% cheaper thinking tokens)
-#   agentic/mm → ollama/minimax-m3:cloud  (1M ctx, multimodal)
+# Default model = opencode-go/deepseek-v4-pro. SWITCH via env: export GX_MODEL=ollama/glm-5.2:cloud
+#   workhorse  → opencode-go/deepseek-v4-pro (default)
+#   mechanical → opencode-go/deepseek-v4-flash (rename/type-hint/i18n/mass edit)
+#   heavy/open → ollama/glm-5.2:cloud  (hard/long-ctx/quality; 1M ctx, MIT)
 #   FAILOVER (opencode token habis) → export GX_MODEL=ollama/glm-5.2:cloud   # separate token pool
-#   offline/private only → ollama/qwen3-coder:30b-a3b-q8_0 (free+local but SLOW on this Mac)
-# NOTE: ollama cloud models need `ollama signin` on the local daemon. free tiers = slow. Pay the receh.
+# NOTE: ollama cloud models need `ollama signin`. free tiers = slow. Pay the receh.
 #
 # ponytail: thin wrapper, no arg-parsing lib. Add getopts only if flags grow.
 set -euo pipefail
 
-MODEL=""          # set only by -m flag (highest precedence)
-PRINT=0
-SPEC=""
-declare -a MSG=()
+MFLAG=""          # -m flag (highest precedence); empty = not passed
+PRINT_MODEL=0
+NEW=0; END=0; PRINT_SESSION=0
+declare -a POS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -m|--model) MODEL="$2"; shift 2 ;;
-    --print-model) PRINT=1; shift ;;   # resolve model, echo, exit (no opencode call)
-    *) if [[ -z "$SPEC" && -f "$1" ]]; then SPEC="$1"; else MSG+=("$1"); fi; shift ;;
+    -m|--model)       MFLAG="$2"; shift 2 ;;
+    --print-model)    PRINT_MODEL=1; shift ;;
+    --new)            NEW=1; shift ;;
+    --end)            END=1; shift ;;
+    --print-session)  PRINT_SESSION=1; shift ;;
+    --)               shift; POS+=("$@"); break ;;
+    *)                POS+=("$1"); shift ;;
   esac
 done
 
 # model resolution (SSOT): -m flag > $GX_MODEL > router state file > default
 STATE_FILE="${ROUTER_STATE:-$HOME/.config/model-router/state}"
-if [[ -z "$MODEL" ]]; then
-  if   [[ -n "${GX_MODEL:-}" ]]; then MODEL="$GX_MODEL"
-  elif [[ -s "$STATE_FILE"   ]]; then MODEL="$(<"$STATE_FILE")"; MODEL="${MODEL//[$'\n\r']/}"
-  else                                MODEL="opencode-go/deepseek-v4-pro"; fi
+RES_MODEL="$MFLAG"
+if [[ -z "$RES_MODEL" ]]; then
+  if   [[ -n "${GX_MODEL:-}" ]]; then RES_MODEL="$GX_MODEL"
+  elif [[ -s "$STATE_FILE"   ]]; then RES_MODEL="$(<"$STATE_FILE")"; RES_MODEL="${RES_MODEL//[$'\n\r']/}"
+  else                                RES_MODEL="opencode-go/deepseek-v4-pro"; fi
+fi
+[[ "$PRINT_MODEL" == 1 ]] && { echo "$RES_MODEL"; exit 0; }
+
+# per-repo active-session pointer, OUTSIDE the repo (zero repo footprint)
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gx"
+mkdir -p "$STATE_DIR"
+REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+PTR="$STATE_DIR/$(printf %s "$REPO" | shasum | cut -c1-12).session"
+
+# --end / --print-session don't need a model — handle first
+[[ "$END" == 1 ]] && { rm -f "$PTR"; echo "gx: session ended" >&2; exit 0; }
+if [[ "$PRINT_SESSION" == 1 ]]; then
+  [[ -s "$PTR" ]] && cut -f1 "$PTR" || { echo "gx: no active session" >&2; exit 1; }
+  exit 0
 fi
 
-if [[ "$PRINT" == 1 ]]; then echo "$MODEL"; exit 0; fi
+# MODE: --new OR a positional file → START ; else a message → CONTINUE
+MODE=""
+if   [[ "$NEW" == 1 ]];                        then MODE=start
+elif [[ ${#POS[@]} -gt 0 && -f "${POS[0]}" ]]; then MODE=start   # legacy positional-file
+elif [[ ${#POS[@]} -gt 0 ]];                   then MODE=continue
+else echo "gx: butuh input. Usage: gx --new <plan.md|\"brief\">  |  gx \"delta\"  |  gx --end" >&2; exit 2; fi
 
-[[ -n "$SPEC" ]] || { echo "gx: butuh spec file. Usage: gx <spec_file> [-m model] [msg]" >&2; exit 2; }
+DEFAULT_GATE="Load CLAUDE.md (§16 routes/tables) + the attached spec. Implement it exactly. Gate: no placeholder/TODO/mock, follow §12 anti-slop + §6 conventions. Edit files only — do not commit."
 
-PROMPT="${MSG[*]:-Load CLAUDE.md (§16 routes/tables) + the attached spec. Implement it exactly. Gate: no placeholder/TODO/mock, follow §12 anti-slop + §6 conventions. Edit files only — do not commit.}"
-
-# message positional FIRST; -f is greedy [array] so it must come LAST (else it eats the message)
-run_opencode() { opencode run "$PROMPT" --agent executor -m "$1" -f "$SPEC"; }
-
-# executor auto-failover: opencode-go tier failure → retry ONCE on ollama/glm-5.2:cloud
-# (separate quota pool per invariant). ponytail ceiling: single retry, no backoff — add
-# retries/backoff only if opencode proves flaky. Never failover an already-ollama model (no loop).
-FAILOVER_MODEL="ollama/glm-5.2:cloud"
-echo "gx → executor | model=$MODEL | spec=$SPEC" >&2
-if ! run_opencode "$MODEL"; then
-  if [[ "$MODEL" == opencode-go/* ]]; then
-    echo "gx: opencode failed → failover $FAILOVER_MODEL (opencode pool dead, switching to ollama)" >&2
-    run_opencode "$FAILOVER_MODEL" || { echo "gx: failover also failed" >&2; exit 1; }
+if [[ "$MODE" == start ]]; then
+  SPEC=""; SLUG=""; PROMPT=""
+  src="${POS[0]:-}"
+  if [[ "$src" == "-" ]]; then
+    PROMPT="$(cat)"; SLUG="adhoc-$(date +%H%M%S)"
+  elif [[ -n "$src" && -f "$src" ]]; then
+    SPEC="$src"; SLUG="$(basename "$src")"; SLUG="${SLUG%.md}"
+    rest=("${POS[@]:1}"); PROMPT="${rest[*]:-$DEFAULT_GATE}"
   else
-    echo "gx: run failed (model=$MODEL) — no failover (not an opencode-go tier)" >&2
-    exit 1
+    PROMPT="${POS[*]}"; SLUG="adhoc-$(date +%H%M%S)"   # inline brief (user bakes the gate in)
   fi
+  [[ -n "$PROMPT" ]] || { echo "gx: empty brief" >&2; exit 2; }
+
+  run_start() {  # $1 = model
+    if [[ -n "$SPEC" ]]; then
+      opencode run "$PROMPT" --agent executor -m "$1" --title "gx:$SLUG" -f "$SPEC"
+    else
+      opencode run "$PROMPT" --agent executor -m "$1" --title "gx:$SLUG"
+    fi
+  }
+
+  # executor auto-failover: opencode-go tier failure → retry ONCE on ollama/glm-5.2:cloud
+  # (separate quota pool per invariant). Never failover an already-ollama model (no loop).
+  FAILOVER_MODEL="ollama/glm-5.2:cloud"
+  USED_MODEL="$RES_MODEL"
+  echo "gx → start | model=$RES_MODEL | title=gx:$SLUG | ${SPEC:+spec=$SPEC}${SPEC:-inline brief}" >&2
+  if ! run_start "$RES_MODEL"; then
+    if [[ "$RES_MODEL" == opencode-go/* ]]; then
+      echo "gx: opencode failed → failover $FAILOVER_MODEL (opencode pool dead)" >&2
+      run_start "$FAILOVER_MODEL" || { echo "gx: failover also failed" >&2; exit 1; }
+      USED_MODEL="$FAILOVER_MODEL"
+    else
+      echo "gx: start failed (model=$RES_MODEL) — no failover (not opencode-go tier)" >&2
+      exit 1
+    fi
+  fi
+
+  # capture the just-created session id by its exact title (robust vs interleaving)
+  SID="$(opencode session list --format json 2>/dev/null | jq -r --arg t "gx:$SLUG" '[.[]|select(.title==$t)]|.[0].id // empty' 2>/dev/null || true)"
+  if [[ -n "$SID" ]]; then
+    printf '%s\t%s\n' "$SID" "$USED_MODEL" > "$PTR"
+    echo "gx: session $SID pinned (continue with: gx \"<delta>\")" >&2
+  else
+    echo "gx: warn — could not capture session id (continue by --new next time)" >&2
+  fi
+
+else  # MODE == continue
+  [[ -s "$PTR" ]] || { echo "gx: no active session — start with: gx --new <plan.md|\"brief\">" >&2; exit 2; }
+  SID="$(cut -f1 "$PTR")"; SMODEL="$(cut -f2 "$PTR")"
+  M="${MFLAG:-$SMODEL}"
+  DELTA="${POS[*]}"
+  echo "gx → continue | session=$SID | model=$M" >&2
+  # ponytail: no continue-failover — resuming a deepseek thread on GLM mid-session is incoherent;
+  # add retry only if continues prove flaky. On failure, start fresh on the other tier via --new.
+  opencode run "$DELTA" --agent executor -m "$M" -s "$SID" \
+    || { echo "gx: continue failed (session $SID). Start fresh: gx --new <plan.md|\"brief\">" >&2; exit 1; }
 fi
 
 echo "--- gx done. Review diff before commit: ---" >&2
