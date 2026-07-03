@@ -23,14 +23,22 @@ import json, os
 m = os.environ["MODEL"]
 mech = "opencode-go/deepseek-v4-flash"
 ctx = (
-    f"JALAN A AUTO-DELEGATE (active executor: {m}): for the IMPLEMENT / bulk-codegen step of every "
-    f"phase, do NOT edit source files yourself — write the phase spec to an in-repo `.md` and run "
-    f"`gx <spec>.md` (resolves to {m} via router state). Mechanical mass-edits "
-    f"(rename/type-hint/i18n/import) -> `gx <spec>.md -m {mech}`. gx auto-failovers a dead opencode "
-    f"pool to ollama/glm-5.2:cloud. STAY on Claude (never delegate): plan/design, writing tests, "
-    f"review, verify, and the commit. For gaspol-parallel, each implementer subagent edits via `gx` "
-    f"on its own file-isolated lane spec. Gotcha: spec file AND targets must be INSIDE the repo; run "
-    f"`gx` from repo root. CRITICAL/auth/migration/money/threshold logic + test authoring = Claude self, never gx."
+    f"JALAN A AUTO-DELEGATE — CHAIN OF COMMAND (active executor: {m}): hand the WHOLE task to the "
+    f"executor, do NOT micro-manage per-step. Write ONE whole-task spec + hard gate (implement + "
+    f"write & RUN tests to green, no placeholder, DON'T commit), then TERIMA-BERES: review the "
+    f"finished diff wholesale + commit. Three tiers — Opus (you) = strategy (brainstorm/plan/review/"
+    f"debug + commit gate); GLM-5.2 (ollama) = execution LEAD / right hand: the autonomous "
+    f"`opencode run -m ollama/glm-5.2:cloud` that OWNS execution, supervises + fixes deepseek's "
+    f"output, takes the hard/long-context/critical slices (migration/auth/threshold) directly, "
+    f"iterates tests to green; deepseek-v4-pro (opencode-go) = bulk labor (cheap first-draft "
+    f"codegen + mechanical mass edits, flash `{mech}` for pure rename/i18n). INVARIANT: "
+    f"GLM-5.2 -> ollama ONLY, deepseek -> opencode-go ONLY, never cross. STAY on Claude (never "
+    f"delegate): the 4 judgment skills (brainstorm/plan/review/debug) + commit. Test authoring + "
+    f"CRITICAL files (auth/migration/money/threshold) now go to the executor too — the guardrail is "
+    f"that YOU REVIEW them harder, not that you type them. `gx <spec>.md` (edit-only, {m}) stays "
+    f"fine for a bounded single-file mechanical edit; the per-step write-test->gx->review LOOP "
+    f"across a multi-phase plan is the ANTI-PATTERN (2x tokens). Gotcha: spec + targets INSIDE the "
+    f"repo; run from repo root."
 )
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ctx}}))
 PY

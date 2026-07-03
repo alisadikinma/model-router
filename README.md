@@ -10,9 +10,19 @@ Three model surfaces exist; this tool governs exactly one:
 
 | Surface | Runs | Governed here? |
 |---|---|---|
-| brain | plan / design / review (Opus, subscription) | ❌ Anthropic-fixed (see limitation) |
+| brain | `gaspol-brainstorm` / `plan` / `review` / `debug` + commit gate (Opus, subscription) | ❌ Anthropic-fixed (see limitation) |
 | subagents | gaspol-dev review/verify (opus/sonnet/haiku) | ❌ Anthropic-fixed |
-| **executor** | bulk codegen via `gx` → opencode | ✅ **this plugin** |
+| **executor** | ALL other execution (`gaspol-execute` / `tdd` / `parallel` + bulk impl + test authoring) via `gx` / autonomous `opencode run` | ✅ **this plugin** |
+
+### Chain of command (LOCKED 2026-07-03)
+
+Three tiers, not two. Opus stays strategy; the executor is itself split into a lead and a laborer:
+
+- **Opus 4.8 = strategy** — the 4 judgment skills above + the commit/push gate. Writes ONE whole-task spec + hard gate, then reviews the finished diff (terima-beres — no per-step micro-management).
+- **GLM-5.2 (ollama) = execution LEAD / right hand** — the autonomous `opencode run -m ollama/glm-5.2:cloud` that OWNS execution: runs the bulk pass, **supervises + fixes deepseek's output**, takes the hard/long-context/critical slices directly (migration/auth/threshold — stronger on coding benches), writes & RUNS tests to green, hands back ONE clean diff. Never commits.
+- **deepseek-v4-pro (opencode-go) = bulk labor** — cheap high-volume first-draft codegen + mechanical mass edits (flash for pure rename/i18n).
+
+Critical files (migration/auth/deploy-gate/threshold) are still IMPLEMENTED by the executor; the guardrail is that Opus **reviews them harder**, not that Opus types them. The per-step `write-test → gx → review` loop across a multi-phase plan is the anti-pattern (≈2× tokens) — prefer one autonomous run per task.
 
 ### Known limitation — brain is NOT multi-model on a subscription
 
