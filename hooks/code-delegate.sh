@@ -28,10 +28,20 @@ case "$FP" in
   *) exit 0 ;;
 esac
 
-# anthropic-solo OR bypass marker → allow the direct edit (Opus codes; or operator-sanctioned fix).
-if [[ "$MODE" == "anthropic-solo" || -e "$BYPASS" ]]; then exit 0; fi
+# ALLOW the direct Write/Edit when the executor is a CLAUDE session (not an external process):
+#   anthropic-team → the Sonnet-5 executor is a Claude Agent-tool subagent that writes via THIS
+#                    same Write/Edit tool — blocking it would block the executor itself. The
+#                    "Opus delegates to Sonnet" discipline is doctrine (Opus's choice at the
+#                    orchestrator level), NOT hook-enforced — the hook cannot tell an Opus write
+#                    from a Sonnet-subagent write (same tool, same session tree).
+#   anthropic-solo → Opus codes directly by design.
+#   bypass marker  → operator-sanctioned direct edit / failover.
+# Only opencode|ollama BLOCK: there the executor (gx/opencode) edits via its OWN process, so
+# denying Claude's Write correctly forces delegation without blocking the executor.
+case "$MODE" in anthropic-team|anthropic-solo) exit 0 ;; esac
+if [[ -e "$BYPASS" ]]; then exit 0; fi
 
-# else HARD BLOCK with a mode-specific remedy.
+# opencode | ollama → HARD BLOCK, route through gx.
 MODE="$MODE" BYPASS="$BYPASS" python3 <<'PY'
 import json, os
 mode = os.environ["MODE"]
@@ -40,13 +50,9 @@ bp = os.environ["BYPASS"]
 if mode == "ollama":
     how = ("route through the ollama executor: `gx --team <spec.md>` (GLM-5.2 lead → @coder-ff "
            "kimi-k2.7-code) for a feature, or `gx \"<brief>\"` (kimi solo) for a bounded edit")
-elif mode == "opencode":
+else:  # opencode
     how = ("route through the opencode executor: `gx --team <spec.md>` (GLM-5.2 lead → @coder "
            "deepseek-v4-pro) for a feature, or `gx \"<brief>\"` (deepseek solo) for a bounded edit")
-else:  # anthropic-team (default)
-    how = ("delegate to a Sonnet-5 executor via the Agent tool: subagent_type='general-purpose', "
-           "model='sonnet', prompt = the whole-task spec + hard gate (implement + write & RUN tests "
-           "to green, no placeholder/TODO/mock, DON'T commit). Do NOT hand-type the code yourself")
 
 reason = (
     f"BLOCKED — code change must go through the executor (session mode: {mode}). "
