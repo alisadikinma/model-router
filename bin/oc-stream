@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+# oc-stream — render opencode `run --format json` events as clean one-liners.
+# Reads NDJSON on stdin (pipe or `tail -f file | oc-stream`), prints a live trace of
+# delegation / tool / file / text / step events. Used by gx --team + Monitor so the
+# executor's work streams to chat instead of running silent.
+# ponytail: stdlib only; unknown event shapes degrade to a compact type line, never crash.
+import sys, json
+
+def one(e):
+    t = e.get("type", "")
+    p = e.get("part", {}) if isinstance(e.get("part"), dict) else {}
+    if t in ("step_start", "step-start"):
+        return "• step start"
+    if t in ("tool", "tool_use"):
+        tool = p.get("tool", "?")
+        st = p.get("state", {}) if isinstance(p.get("state"), dict) else {}
+        inp = st.get("input", {}) if isinstance(st.get("input"), dict) else {}
+        if tool == "task":
+            who = inp.get("subagent_type") or (inp.get("description", "") or "")[:40]
+            return f"→ DELEGATE task → @{who}"
+        if tool in ("write", "edit"):
+            return f"✎ {tool}: {str(inp.get('filePath', '?')).split('/')[-1]}"
+        if tool == "bash":
+            return f"$ {str(inp.get('command', ''))[:70]}"
+        if tool == "read":
+            return f"\U0001f4d6 read: {str(inp.get('filePath', '?')).split('/')[-1]}"
+        return f"⚙ {tool}"
+    if t == "text":
+        txt = (p.get("text") or "").strip()
+        return f"\U0001f4ac {txt[:140]}" if txt else None
+    if t in ("step_finish", "step-finish"):
+        tk = p.get("tokens", {}) if isinstance(p.get("tokens"), dict) else {}
+        cost = p.get("cost")
+        tail = f" out={tk.get('output', '?')}tok"
+        if cost:
+            tail += f" ${cost:.4f}"
+        return f"• step done{tail}"
+    return None
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    out = one(e)
+    if out:
+        print(out, flush=True)

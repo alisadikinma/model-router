@@ -4,6 +4,15 @@ Executor-tier model router for Claude Code. One config, one command (`route`) to
 bulk-codegen backend between **opencode (DeepSeek-V4-Pro)** and **ollama (GLM-5.2)** — with
 automatic failover. The thinking/review brain stays on your Claude subscription.
 
+> **2026-07-04 — TWO-TIER EXECUTOR + 4 MODES.** `gx --team` now runs a GLM-5.2 **lead** that
+> delegates coding to a deepseek **`@coder`** subagent (one opencode task); plain `gx` = deepseek
+> solo. `gx` streams events to chat via `oc-stream`. Session mode (`~/.config/model-router/mode`,
+> SessionStart popup, default **`anthropic-team`** = Opus brain + Sonnet-5 Agent executor):
+> `anthropic-team` · `anthropic-solo` · `opencode` (glm+deepseek) · `ollama` (glm+kimi). Pools:
+> DEFAULT = opencode-go, FAILOVER = ollama (no more GLM→ollama-only invariant). **Panic** (Anthropic
+> subscription out) → `route panic --run` → `opencode run --agent brain` (GLM owns judgment +
+> delegates; human commits). Full design: [docs/plans/2026-07-04-two-tier-executor-glm-lead-deepseek.md](docs/plans/2026-07-04-two-tier-executor-glm-lead-deepseek.md).
+
 ## What it does (and what it can't)
 
 Three model surfaces exist; this tool governs exactly one:

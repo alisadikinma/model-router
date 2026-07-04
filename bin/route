@@ -38,18 +38,21 @@ case "$cmd" in
     fi
     exit 0 ;;
   panic)
-    # emergency brain when Anthropic weekly-max hits: GLM-5.2 via ollama (separate pool → keeps
-    # the executor's opencode-go pool intact, per invariant). ponytail: print-first, --run opt-in.
-    PB="$(j panicBrain)"
+    # Opus/Anthropic subscription out (kills Opus AND Sonnet) → the GLM `brain` agent takes over:
+    # it OWNS the judgment (design/plan/review) inline AND delegates coding to @coder deepseek —
+    # a two-tier headless brain, not a lone model. The HUMAN reviews + commits (brain is bash:deny).
+    # ponytail: print-first, --run opt-in. brain runs on opencode-go; brain-ff (ollama) if that's out too.
     if [[ "${2:-}" == "--run" ]]; then
       shift 2
-      echo "route: launching emergency brain → opencode run -m $PB" >&2
-      exec opencode run -m "$PB" "$@"
+      echo "route: launching emergency brain → opencode run --agent brain" >&2
+      exec opencode run --agent brain "$@"
     fi
     cat <<EOF
-# Anthropic weekly-max? GLM-5.2 becomes your orchestrator brain (separate ollama pool):
-opencode run -m $PB "<your task>"
-# executor's opencode-go pool stays intact. To launch directly: route panic --run "<your task>"
+# Anthropic subscription out? GLM becomes your standalone brain (owns judgment + delegates coding):
+opencode run --agent brain "<your task>"
+# opencode-go also down? use the ollama pair:
+opencode run --agent brain-ff "<your task>"
+# To launch directly: route panic --run "<your task>"   (the HUMAN reviews + commits)
 EOF
     exit 0 ;;
 esac

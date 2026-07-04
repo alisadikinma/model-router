@@ -1,11 +1,14 @@
 {
   // model-router SSOT — governs the EXECUTOR only (surface C).
   // Brain (Opus) + gaspol subagents = Anthropic subscription, NOT routed (ccr can't proxy sub, issue #482).
-  // INVARIANT: GLM-5.2 -> ollama ONLY; deepseek -> opencode-go ONLY. Never cross (separate quota pools).
+  // POOLS: DEFAULT executor pool = opencode-go (glm-5.2 lead + deepseek-v4-pro coder).
+  //        FAILOVER executor pool = ollama    (glm-5.2 lead + kimi-k2.7-code coder).
+  //        The two-tier lead+coder models live in ~/.config/opencode/opencode.jsonc (agent config),
+  //        NOT here — this file drives the LEGACY single-model `route` state + `gx -m` overrides.
 
   "tiers": {
     "brain":      { "surface": "claude-subscription", "route": false },
-    "heavy":      { "surface": "opencode", "model": "ollama/glm-5.2:cloud" },
+    "heavy":      { "surface": "opencode", "model": "opencode-go/glm-5.2" },
     "workhorse":  { "surface": "opencode", "model": "opencode-go/deepseek-v4-pro" },
     "mechanical": { "surface": "opencode", "model": "opencode-go/deepseek-v4-flash" },
     "offline":    { "surface": "opencode", "model": "ollama/qwen3-coder:30b-a3b-q8_0" }
@@ -23,14 +26,15 @@
   // profiles = executor model that `route <profile>` writes to the state file (gx reads it).
   "profiles": {
     "default":           "opencode-go/deepseek-v4-pro",
-    "glm-heavy":         "ollama/glm-5.2:cloud",
+    "glm-heavy":         "opencode-go/glm-5.2",
     "mechanical":        "opencode-go/deepseek-v4-flash",
     "failover-opencode": "ollama/glm-5.2:cloud",
     "offline":           "ollama/qwen3-coder:30b-a3b-q8_0"
   },
 
-  // emergency brain when Anthropic weekly-max hits (manual, printed by `route panic`).
-  // GLM on ollama pool -> keeps executor's opencode-go pool intact (invariant).
+  // panic (Opus/Anthropic subscription out) → `route panic --run` launches `opencode run --agent
+  // brain` (GLM owns judgment + delegates to @coder; human commits). panicBrain = the `brain-ff`
+  // fallback model when opencode-go is ALSO down. ollama = a genuinely separate quota pool.
   "panicBrain": "ollama/glm-5.2:cloud",
 
   "autoFailover": { "executor": true }

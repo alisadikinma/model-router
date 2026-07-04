@@ -1,38 +1,40 @@
 #!/usr/bin/env bash
-# gx — gaspol-execute delegate. Jalan A: Claude pegang otak gaspol (plan/spec/review/
-# test/commit), script ini cuma tangan codegen via opencode executor. Session-aware:
-# handover = arahin ke plan file YANG SUDAH ADA (atau brief inline), lalu delta-continue
-# untuk iterative fix — TIDAK bikin file handover .md terpisah tiap kali.
+# gx — gaspol codegen delegate. Jalan A: Claude pegang otak (plan/spec/review/commit),
+# script ini tangan codegen via opencode. Session-aware: handover = arahin ke plan file
+# YANG SUDAH ADA (atau brief inline), lalu delta-continue untuk iterative fix.
+#
+# TWO EXECUTION MODES:
+#   gx <plan.md|"brief">            # SOLO   → --agent coder   (deepseek writes directly)
+#   gx --team <plan.md|"brief">     # TWO-TIER→ --agent executor (GLM lead → @coder deepseek)
+#   gx "delta"                      # CONTINUE active session (reuses its agent)
+#
+# POOL (which model pair) comes from the session mode marker ~/.config/model-router/mode:
+#   opencode (default) → executor/coder  = opencode-go glm-5.2 + deepseek-v4-pro ; failover → ollama
+#   ollama             → executor-ff/coder-ff = ollama glm-5.2 + kimi-k2.7-code  ; failover → opencode
+# The agent's OWN config (opencode.jsonc) carries the model — gx does NOT pass -m unless you
+# explicitly override (e.g. mechanical mass-edit: gx -m opencode-go/deepseek-v4-flash "…").
 #
 # Usage:
-#   gx docs/plans/<plan>.md ["gate msg"]   # START dari plan file (legacy positional-file form)
-#   gx --new <plan.md> ["gate msg"]         # START eksplisit dari plan file (reset walau ada sesi aktif)
-#   gx --new "<brief inline + gate>"        # START planless dari brief inline (no file)
-#   gx --new -  <<'EOF' … EOF               # START planless dari brief stdin multiline (no file)
-#   gx "delta msg"                          # CONTINUE sesi aktif dengan delta (no file). Error kalau tak ada sesi.
-#   gx --end                                # tutup pointer sesi aktif (task selesai)
-#   gx --print-session                      # echo ses_id aktif (debug)
-#   gx --print-model                        # resolve model, echo, exit
-#   gx -m <provider/model> …                # override model (di START, di-pin ke sesi)
+#   gx docs/plans/<plan>.md ["gate"]   # START from a plan file (solo)
+#   gx --team docs/plans/<plan>.md     # START two-tier (GLM lead)
+#   gx --new <plan.md|"brief">         # START (reset even if a session is active)
+#   gx --new - <<'EOF' … EOF           # START from multiline stdin brief
+#   gx "delta"                         # CONTINUE active session
+#   gx --end | --print-session | --print-model
+#   gx -m <provider/model> …           # explicit model override (pins to the session)
 #
-# Default model = opencode-go/deepseek-v4-pro. SWITCH via env: export GX_MODEL=ollama/glm-5.2:cloud
-#   workhorse  → opencode-go/deepseek-v4-pro (default)
-#   mechanical → opencode-go/deepseek-v4-flash (rename/type-hint/i18n/mass edit)
-#   heavy/open → ollama/glm-5.2:cloud  (hard/long-ctx/quality; 1M ctx, MIT)
-#   FAILOVER (opencode token habis) → export GX_MODEL=ollama/glm-5.2:cloud   # separate token pool
-# NOTE: ollama cloud models need `ollama signin`. free tiers = slow. Pay the receh.
-#
-# ponytail: thin wrapper, no arg-parsing lib. Add getopts only if flags grow.
+# NOTE: ollama pool models need `ollama signin`. ponytail: thin wrapper, no getopts lib.
 set -euo pipefail
 
-MFLAG=""          # -m flag (highest precedence); empty = not passed
+MFLAG=""          # explicit -m override; empty = let the agent config drive the model
 PRINT_MODEL=0
-NEW=0; END=0; PRINT_SESSION=0
+NEW=0; END=0; PRINT_SESSION=0; TEAM=0
 declare -a POS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--model)       MFLAG="$2"; shift 2 ;;
+    --team)           TEAM=1; shift ;;
     --print-model)    PRINT_MODEL=1; shift ;;
     --new)            NEW=1; shift ;;
     --end)            END=1; shift ;;
@@ -42,15 +44,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# model resolution (SSOT): -m flag > $GX_MODEL > router state file > default
-STATE_FILE="${ROUTER_STATE:-$HOME/.config/model-router/state}"
-RES_MODEL="$MFLAG"
-if [[ -z "$RES_MODEL" ]]; then
-  if   [[ -n "${GX_MODEL:-}" ]]; then RES_MODEL="$GX_MODEL"
-  elif [[ -s "$STATE_FILE"   ]]; then RES_MODEL="$(<"$STATE_FILE")"; RES_MODEL="${RES_MODEL//[$'\n\r']/}"
-  else                                RES_MODEL="opencode-go/deepseek-v4-pro"; fi
+# POOL from the session mode marker (Phase 6). Default opencode. anthropic-* modes don't use gx.
+MODE_MARKER="${ROUTER_MODE:-$HOME/.config/model-router/mode}"
+POOL="opencode"
+if [[ -s "$MODE_MARKER" ]]; then
+  m="$(<"$MODE_MARKER")"; m="${m//[$'\n\r']/}"
+  [[ "$m" == ollama ]] && POOL="ollama"
 fi
-[[ "$PRINT_MODEL" == 1 ]] && { echo "$RES_MODEL"; exit 0; }
+
+# agent (+ its failover partner) from pool × mode. Solo = coder tier; team = executor lead tier.
+if [[ "$POOL" == ollama ]]; then
+  if [[ "$TEAM" == 1 ]]; then PRIMARY_AGENT="executor-ff"; FAILOVER_AGENT="executor"
+  else                        PRIMARY_AGENT="coder-ff";    FAILOVER_AGENT="coder"; fi
+else
+  if [[ "$TEAM" == 1 ]]; then PRIMARY_AGENT="executor";    FAILOVER_AGENT="executor-ff"
+  else                        PRIMARY_AGENT="coder";       FAILOVER_AGENT="coder-ff"; fi
+fi
+
+[[ "$PRINT_MODEL" == 1 ]] && { echo "agent=$PRIMARY_AGENT pool=$POOL${MFLAG:+ mflag=$MFLAG}"; exit 0; }
+
+# stream: pipe opencode `--format json` through oc-stream → clean live event lines (delegation,
+# tool, file, text) so the executor's work shows in the terminal/chat instead of running silent.
+# Disable with GX_NOSTREAM=1 (raw opencode output). pipefail makes opencode's non-zero propagate.
+OC_STREAM="$(command -v oc-stream 2>/dev/null || true)"
+oc_run() {  # all args → `opencode run`
+  if [[ -n "$OC_STREAM" && -z "${GX_NOSTREAM:-}" ]]; then
+    opencode run "$@" --format json | "$OC_STREAM"
+  else
+    opencode run "$@"
+  fi
+}
 
 # per-repo active-session pointer, OUTSIDE the repo (zero repo footprint)
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gx"
@@ -58,7 +81,6 @@ mkdir -p "$STATE_DIR"
 REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 PTR="$STATE_DIR/$(printf %s "$REPO" | shasum | cut -c1-12).session"
 
-# --end / --print-session don't need a model — handle first
 [[ "$END" == 1 ]] && { rm -f "$PTR"; echo "gx: session ended" >&2; exit 0; }
 if [[ "$PRINT_SESSION" == 1 ]]; then
   [[ -s "$PTR" ]] && cut -f1 "$PTR" || { echo "gx: no active session" >&2; exit 1; }
@@ -70,9 +92,12 @@ MODE=""
 if   [[ "$NEW" == 1 ]];                        then MODE=start
 elif [[ ${#POS[@]} -gt 0 && -f "${POS[0]}" ]]; then MODE=start   # legacy positional-file
 elif [[ ${#POS[@]} -gt 0 ]];                   then MODE=continue
-else echo "gx: butuh input. Usage: gx --new <plan.md|\"brief\">  |  gx \"delta\"  |  gx --end" >&2; exit 2; fi
+else echo "gx: butuh input. Usage: gx [--team] <plan.md|\"brief\">  |  gx \"delta\"  |  gx --end" >&2; exit 2; fi
 
-DEFAULT_GATE="Load CLAUDE.md (§16 routes/tables) + the attached spec. Implement it exactly. Gate: no placeholder/TODO/mock, follow §12 anti-slop + §6 conventions. Edit files only — do not commit."
+DEFAULT_GATE="Load CLAUDE.md (§16 routes/tables) + the attached spec. Implement it exactly. Gate: no placeholder/TODO/mock, follow §12 anti-slop + §6 conventions. Write AND run tests to green. Edit files only — do not commit."
+
+# build the -m override arg once (empty unless the user passed -m)
+declare -a MFLAG_ARGS=(); [[ -n "$MFLAG" ]] && MFLAG_ARGS=(-m "$MFLAG")
 
 if [[ "$MODE" == start ]]; then
   SPEC=""; SLUG=""; PROMPT=""
@@ -87,48 +112,41 @@ if [[ "$MODE" == start ]]; then
   fi
   [[ -n "$PROMPT" ]] || { echo "gx: empty brief" >&2; exit 2; }
 
-  run_start() {  # $1 = model
+  run_start() {  # $1 = agent
     if [[ -n "$SPEC" ]]; then
-      opencode run "$PROMPT" --agent executor -m "$1" --title "gx:$SLUG" -f "$SPEC"
+      oc_run "$PROMPT" --agent "$1" ${MFLAG_ARGS[@]+"${MFLAG_ARGS[@]}"} --title "gx:$SLUG" -f "$SPEC"
     else
-      opencode run "$PROMPT" --agent executor -m "$1" --title "gx:$SLUG"
+      oc_run "$PROMPT" --agent "$1" ${MFLAG_ARGS[@]+"${MFLAG_ARGS[@]}"} --title "gx:$SLUG"
     fi
   }
 
-  # executor auto-failover: opencode-go tier failure → retry ONCE on ollama/glm-5.2:cloud
-  # (separate quota pool per invariant). Never failover an already-ollama model (no loop).
-  FAILOVER_MODEL="ollama/glm-5.2:cloud"
-  USED_MODEL="$RES_MODEL"
-  echo "gx → start | model=$RES_MODEL | title=gx:$SLUG | ${SPEC:+spec=$SPEC}${SPEC:-inline brief}" >&2
-  if ! run_start "$RES_MODEL"; then
-    if [[ "$RES_MODEL" == opencode-go/* ]]; then
-      echo "gx: opencode failed → failover $FAILOVER_MODEL (opencode pool dead)" >&2
-      run_start "$FAILOVER_MODEL" || { echo "gx: failover also failed" >&2; exit 1; }
-      USED_MODEL="$FAILOVER_MODEL"
-    else
-      echo "gx: start failed (model=$RES_MODEL) — no failover (not opencode-go tier)" >&2
-      exit 1
-    fi
+  # auto-failover: primary agent (its pool) fails → retry ONCE on the failover-pool agent.
+  # Never loops (failover agent is invoked at most once).
+  USED_AGENT="$PRIMARY_AGENT"
+  echo "gx → start | agent=$PRIMARY_AGENT pool=$POOL$([[ "$TEAM" == 1 ]] && echo ' (two-tier)') | title=gx:$SLUG | ${SPEC:+spec=$SPEC}${SPEC:-inline brief}" >&2
+  if ! run_start "$PRIMARY_AGENT"; then
+    echo "gx: $PRIMARY_AGENT failed → failover $FAILOVER_AGENT (pool dead)" >&2
+    run_start "$FAILOVER_AGENT" || { echo "gx: failover also failed" >&2; exit 1; }
+    USED_AGENT="$FAILOVER_AGENT"
   fi
 
   # capture the just-created session id by its exact title (robust vs interleaving)
   SID="$(opencode session list --format json 2>/dev/null | jq -r --arg t "gx:$SLUG" '[.[]|select(.title==$t)]|.[0].id // empty' 2>/dev/null || true)"
   if [[ -n "$SID" ]]; then
-    printf '%s\t%s\n' "$SID" "$USED_MODEL" > "$PTR"
-    echo "gx: session $SID pinned (continue with: gx \"<delta>\")" >&2
+    printf '%s\t%s\n' "$SID" "$USED_AGENT" > "$PTR"
+    echo "gx: session $SID pinned (agent=$USED_AGENT; continue with: gx \"<delta>\")" >&2
   else
     echo "gx: warn — could not capture session id (continue by --new next time)" >&2
   fi
 
 else  # MODE == continue
-  [[ -s "$PTR" ]] || { echo "gx: no active session — start with: gx --new <plan.md|\"brief\">" >&2; exit 2; }
-  SID="$(cut -f1 "$PTR")"; SMODEL="$(cut -f2 "$PTR")"
-  M="${MFLAG:-$SMODEL}"
+  [[ -s "$PTR" ]] || { echo "gx: no active session — start with: gx [--team] <plan.md|\"brief\">" >&2; exit 2; }
+  SID="$(cut -f1 "$PTR")"; SAGENT="$(cut -f2 "$PTR")"; SAGENT="${SAGENT:-coder}"
   DELTA="${POS[*]}"
-  echo "gx → continue | session=$SID | model=$M" >&2
-  # ponytail: no continue-failover — resuming a deepseek thread on GLM mid-session is incoherent;
-  # add retry only if continues prove flaky. On failure, start fresh on the other tier via --new.
-  opencode run "$DELTA" --agent executor -m "$M" -s "$SID" \
+  echo "gx → continue | session=$SID | agent=$SAGENT" >&2
+  # ponytail: no continue-failover — resuming a thread on the other pool mid-session is incoherent;
+  # on failure start fresh on the other pool via --new.
+  oc_run "$DELTA" --agent "$SAGENT" ${MFLAG_ARGS[@]+"${MFLAG_ARGS[@]}"} -s "$SID" \
     || { echo "gx: continue failed (session $SID). Start fresh: gx --new <plan.md|\"brief\">" >&2; exit 1; }
 fi
 
