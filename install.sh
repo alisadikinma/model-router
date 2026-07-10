@@ -25,6 +25,7 @@ link "$SRC/hooks/delegate.sh"      "$HOOK_DIR/delegate.sh"
 link "$SRC/hooks/code-delegate.sh" "$HOOK_DIR/code-delegate.sh"
 link "$SRC/hooks/session-mode.sh"  "$HOOK_DIR/session-mode.sh"
 link "$SRC/opencode.jsonc"         "$OC_DIR/opencode.jsonc"
+link "$SRC/opencode.AGENTS.md"     "$OC_DIR/AGENTS.md"
 
 # if an old gaspol delegate hook is already registered (settings.json points at it), repoint
 # it to the new state-aware logic so the registration keeps working with no settings.json edit.
