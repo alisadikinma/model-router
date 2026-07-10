@@ -3,8 +3,8 @@
 # Fires on ANY substantive code file: BLOCKS the hand-edit so the change is FORCED through the
 # executor. The remedy is MODE-AWARE (session mode marker ~/.config/model-router/mode):
 #   anthropic-team (DEFAULT) → delegate to a Sonnet-5 Agent (native Claude Code Agent tool)
-#   anthropic-solo           → allow the direct Opus edit (bypass marker is set by the selector)
-#   opencode | ollama        → route through `gx` / `gx --team`
+#   anthropic-solo           → allow the direct brain edit (bypass marker is set by the selector)
+#   opencode                 → route through `gx` / `gx --team`
 # ponytail: a hook can only inject text or block — it CANNOT run the Agent tool or gx. It names
 # the right entry point; Claude issues the actual call. gx/opencode + the Agent-tool subagent
 # edit files via their OWN process, so DENYing Claude's Edit does NOT block them (clean split).
@@ -34,25 +34,21 @@ esac
 #                    "Opus delegates to Sonnet" discipline is doctrine (Opus's choice at the
 #                    orchestrator level), NOT hook-enforced — the hook cannot tell an Opus write
 #                    from a Sonnet-subagent write (same tool, same session tree).
-#   anthropic-solo → Opus codes directly by design.
+#   anthropic-solo → the active /model codes directly by design.
 #   bypass marker  → operator-sanctioned direct edit / failover.
-# Only opencode|ollama BLOCK: there the executor (gx/opencode) edits via its OWN process, so
+# Only opencode BLOCKS: there the executor (gx/opencode) edits via its OWN process, so
 # denying Claude's Write correctly forces delegation without blocking the executor.
 case "$MODE" in anthropic-team|anthropic-solo) exit 0 ;; esac
 if [[ -e "$BYPASS" ]]; then exit 0; fi
 
-# opencode | ollama → HARD BLOCK, route through gx.
+# opencode → HARD BLOCK, route through gx.
 MODE="$MODE" BYPASS="$BYPASS" python3 <<'PY'
 import json, os
 mode = os.environ["MODE"]
 bp = os.environ["BYPASS"]
 
-if mode == "ollama":
-    how = ("route through the ollama executor: `gx --team <spec.md>` (GLM-5.2 lead → @coder-ff "
-           "kimi-k2.7-code) for a feature, or `gx \"<brief>\"` (kimi solo) for a bounded edit")
-else:  # opencode
-    how = ("route through the opencode executor: `gx --team <spec.md>` (GLM-5.2 lead → @coder "
-           "deepseek-v4-pro) for a feature, or `gx \"<brief>\"` (deepseek solo) for a bounded edit")
+how = ("route through the opencode executor: `gx --team <spec.md>` (GLM-5.2 lead → @coder "
+       "deepseek-v4-pro) for a feature, or `gx \"<brief>\"` (deepseek solo) for a bounded edit")
 
 reason = (
     f"BLOCKED — code change must go through the executor (session mode: {mode}). "

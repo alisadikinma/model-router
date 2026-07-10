@@ -4,7 +4,7 @@
   // subagent via the built-in `task` tool. `edit:deny` on every lead is the delegation lever
   // (edit:allow makes GLM code trivial tasks itself instead of delegating — proven).
   //
-  // Pools:  DEFAULT = opencode-go (glm-5.2 lead + deepseek-v4-pro coder)
+  // Pools:  DEFAULT = opencode-go (glm-5.2 lead + deepseek-v4-flash coder)
   //         FAILOVER = ollama    (glm-5.2 lead + kimi-k2.7-code coder)   ← `-ff` agents
   //         PANIC (Opus/Anthropic subscription out) = `brain` (GLM owns judgment + delegates)
   // Only the coder tier has bash (to RUN tests); leads + brains are bash:deny (never commit).
@@ -31,9 +31,9 @@
       "permission": { "edit": "deny", "bash": "deny", "webfetch": "deny" }
     },
     "coder": {
-      "description": "Bulk code implementer (opencode-go/deepseek-v4-pro). Writes and edits the code for a slice assigned by the lead, and RUNS its tests to green. Use for all routine implementation and mechanical edits.",
+      "description": "Bulk code implementer (opencode-go/deepseek-v4-flash). Writes and edits the code for a slice assigned by the lead, and RUNS its tests to green. Use for all routine implementation and mechanical edits.",
       "mode": "all",
-      "model": "opencode-go/deepseek-v4-pro",
+      "model": "opencode-go/deepseek-v4-flash",
       "prompt": "You are the bulk coder. Implement exactly the slice the lead assigns with real, working code — no placeholder/TODO/mock. Write AND RUN the tests for what you build and iterate until they pass (green). Edit files and run tests only. NEVER git commit or git push — leave the diff for the supervisor to review and commit.",
       "permission": { "edit": "allow", "bash": "allow", "webfetch": "deny" }
     },
