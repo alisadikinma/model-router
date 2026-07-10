@@ -27,6 +27,15 @@ link "$SRC/hooks/session-mode.sh"  "$HOOK_DIR/session-mode.sh"
 link "$SRC/opencode.jsonc"         "$OC_DIR/opencode.jsonc"
 link "$SRC/opencode.AGENTS.md"     "$OC_DIR/AGENTS.md"
 
+# shell bridge: source the gaspol-executor selector so gaspol-dev Option 4 sees $GASPOL_EXECUTOR
+# (idempotent — only appends the source line once). Env vars can't be symlinked, so this is the
+# one profile edit the installer makes.
+ZSHRC="$HOME/.zshrc"
+if [[ -f "$ZSHRC" ]] && ! grep -qF "shell/gaspol-executor.sh" "$ZSHRC"; then
+  printf '\nsource "%s/shell/gaspol-executor.sh"  # model-router: gaspol-dev Option 4 bridge\n' "$SRC" >> "$ZSHRC"
+  echo "added gaspol-executor source to $ZSHRC"
+fi
+
 # if an old gaspol delegate hook is already registered (settings.json points at it), repoint
 # it to the new state-aware logic so the registration keeps working with no settings.json edit.
 OLD="$HOOK_DIR/gaspol-opencode-delegate.sh"
