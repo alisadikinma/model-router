@@ -25,11 +25,13 @@ Claude Code did the brainstorm + plan and will do the review + commit. **You imp
 3. **NEVER `git commit` / `git push`.** Leave the finished diff for the supervisor (Claude/human) to review and commit.
 4. **Stay in scope** — touch only the files/steps the plan names; respect its non-goals / do-not-touch list.
 
-### Progress ledger — per-plan, never shared
-Multiple plans may run concurrently, so each plan owns its own ledger:
+### Progress ledger — per-plan, HARD PER-PHASE GATE (not a closing report)
+Multiple plans may run concurrently, so each plan owns its own ledger. Writing it is a **blocking gate between phases**, not a report you fill in at the end:
 - The plan header names it, e.g. `Progress ledger: .gaspol/progress/<slug>.md` (slug = the plan's slug).
-- Update **only that named file** after each phase (mark phase COMPLETE + one-line evidence).
-- **Never write to a shared/global progress ledger** (e.g. `.gaspol/progress.md`) — that is the overall build history, owned by the supervisor.
+- **After you finish a phase and BEFORE you start the next one, STOP and append that phase's line to the ledger.** No next phase until the line is written. Treat it exactly like a test gate — skipping it is a contract violation, not a cosmetic miss.
+- The line carries: status `done` + the **exact command you ran and its result** (test counts, pass/fail). Set the line to `doing` when you START a phase, `done` once its tests are green.
+- **Never batch all updates at the end.** An end-of-run flush defeats the ledger — no live progress, and a crash mid-run leaves a stale `todo` instead of a truthful cursor. One write per phase, as you go, so an interrupted run is resumable.
+- Update **only that named file**. **Never write the shared/global `.gaspol/progress.md`** — that is the supervisor's overall build history.
 - If the plan names no ledger, ask; don't guess a path.
 
 ### Code lazily (ponytail stance)
